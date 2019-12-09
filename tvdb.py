@@ -60,6 +60,13 @@ class TVDB:
             return episodeData
         else:
             return data['data']
+    def getEpisodeTitleListBySeriesID(self,seriesID):
+        seriesData = self.getEpisodesBySeriesID(seriesID)
+        epList = []
+        for ep in seriesData:
+            epList.append(ep['episodeName'])
+        return epList
+
             
     def searchSeries(self,searchString):
         if self.__tokenNeedsRefresh():

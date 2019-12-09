@@ -15,8 +15,22 @@ def guessSeriesName(filelist):
 def getMostCommonString(filelist):
 	return 0
 
+def isEpisodeOnlyNumeric():
+	return 0
 
-
+# This is where we need to see if we have sub separators..... e.g: xxx_-_xxx where the real separator is the -
+def pruneSeparators(episode,separationList, separators = " .-_"):
+	separators = separationList.keys()
+	print(episode['title'])
+	for separator, stringChunks in separationList.items():
+		for chunk, i in enumerate(stringChunks):
+			if i != 0 and i != len(stringChunks) - 1:
+				if stringChunks[i - 1] == stringChunks[i + 1] and stringChunks[i - 1] in separators:
+					# we may have a sub separator
+					print(stringChunks[i - 1])
+				
+# This function will have problems with TV shows that have the same name but are differentiated by the year
+# since often the name of the show will include the year inside parenthesis
 def removeExtraCrap(filename,betweenChars=["[]","()"],separators = " .-_"):
 	for group in betweenChars:
 		while filename.find(group[0]) != -1 and filename.find(group[1]) != -1:
@@ -48,9 +62,8 @@ def filenameToEpisodeObject(filepath):
 
 
 # Starting from left to right, starts joining the separations together and seeing how close to the show we can get. Once it finds the 
-# 
-#
-# The series name will include any separators as part of the filename. TODO:Check both series name as it is written in the file name and also check the 
+# closest matching string it cuts that off the separation list. The separation list is probably not necessary until dealing with the episode titles
+# but it does help to increase the accuracy of the fuzzy search
 #
 # Improvements: Search for, and remove, the series from the filename w/o having to split stuff a bunch?
 def popSeriesFromFile(episode,separationList,tvdbEpisodeInfo={},currentEpData={},currentSeriesData=[]):
@@ -59,6 +72,7 @@ def popSeriesFromFile(episode,separationList,tvdbEpisodeInfo={},currentEpData={}
 	seriesFormatted = series.replace(' ',"{separator}")
 	highestRatio = 0
 	highestRatioChunk = ""
+	highestRatioSep = ""
 	for separator,splitString in separationList.items():
 		if(len(splitString) > 1):
 			sepSeries = seriesFormatted.format(separator=separator)
@@ -68,6 +82,7 @@ def popSeriesFromFile(episode,separationList,tvdbEpisodeInfo={},currentEpData={}
 				if ratio > highestRatio:
 					highestRatio = ratio
 					highestRatioChunk = chunk
+					highestRatioSep = separator
 	finalString = ""
 	for separator,splitString in separationList.items():
 		builtString = separator.join(splitString)
@@ -75,31 +90,61 @@ def popSeriesFromFile(episode,separationList,tvdbEpisodeInfo={},currentEpData={}
 		finalString = partition[0] + partition[2]
 		if finalString[0] in separationList.keys():
 			finalString = finalString[1:]
+		if highestRatioSep == separator:
+			currentEpData['modifiedTitle'] = finalString
 		separationList[separator] = finalString.split(separator)
-	print(separationList)
 
 
 def popEpisodeSeasonFromFile(episode,separationList,tvdbEpisodeInfo={},currentEpData={}):
-	filename = episode['title']
-	formatCheck1 = re.compile('[sS]\d\d[eE]\d\d[aAbBcCdD]')
-	formatCheck2 = re.compile('[sS]\d\d[eE]\d\d')
+	if(currentEpData['modifiedTitle']):
+		filename = currentEpData['modifiedTitle']
+	else:
+		filename = episode['title']
+	format1Check = re.compile('[sS]\d\d[eE]\d\d[aAbBcCdD]') # May god have mercy on my soul when I have to deal with a show using this as an episode title.....
+	format2Check = re.compile('[sS]\d\d[eE]\d\d')
 	abovedir,curdir = os.path.split(episode['path'])
 	if 'season' in curdir.lower():
 		curdir_l = curdir.lower()
-		currentEpData['season'] = curdir_l.split('season')[1]
-	format1List = formatCheck1.split(filename)
-	if len(format1List) != 1 and filename not in format1List:
-		print('something')
+		currentEpData['seasonNumber'] = curdir_l.split('season')[1]
+
+	format1Result = format1Check.findall(filename)
+	if len(format1Result) > 0:
+		
+		print("format 1")
+		# episode naming convention is somewhat standard(SXXEXXa and SXXEXXb format is not handled well at all, needs to be SXXEXX and SXXEXX+1)
+		# if the file has two episodes (common in cartoons where is each episode is ~11 mins long and some people are stupid enough to put them in a single file)
+		# the format should be Show.SXXEXXEXX+1.Episode1Title.Episode2Title
+		# I'm making the assumption that if one file has this format, all other files will. Whenever I process the filenames I can correct as necessary
+		# and yes I realize this is redundant
+		
+	else:
+		format2Result = format2Check.findall(filename)
+		if len(format2Result) > 0:
+			print("format 2")
+			#episode naming convention is standard and Plex can likely handle it (should we just split it off at this point????)
+			season = format2Result[0][1:3]
+			episode = format2Result[0][4:6]
+			currentEpData['seasonNumber'] = season
+			currentEpData['episodeNumber'] = episode
+			currentEpData['modifiedTitle'] = format2Check.split(filename)[1]
+		else:
+			# How the fuck do we want to do this.....
+			# Episode does not have SXXEXX format
+			# Could have format XXX... which is just the absolute episode number
+			# Could have format SEE... Season 1 Episode 23 -> 123
+			# Could be something I've never seen before....
+			pruneSeparators(episode, separationList)
+
 	format2List = formatCheck2.split(filename)
 
 
 def popEpisodeTitlesFromFile(filename,separationList,rvdbEpisodeInfo={},currentEpData={}):
 	return 0
 
-
+# 
 def extractEpisodeInfo(episode,tvdbEpisodeInfo={},tvdbEpisodeNameList = []):
 	cleanFile = episode['title']
-	commonSeparators = " .-_" # These are the most common separators, and will probably need 
+	commonSeparators = " .-_" # These are the most common separators, and will probably need revisiting
 	separationList = {}
 	for char in commonSeparators:
 		separationList[char] = cleanFile.split(char)
@@ -147,5 +192,6 @@ show = folderlist[2]
 pshows = tv.searchSeries(show)
 testshow = pshows[0]['id']
 showInfo = {'series':pshows[0],'episodes':tv.getEpisodesBySeriesID(testshow)}
+print(showInfo['episodes'])
 extractEpisodesFromPath(os.path.join("/srv/Schustore/Downloads/Mega/test/" + show),showInfo)
 # renameEpisodes(folderlist[0],tv.getEpisodesBySeriesID(testshow))
