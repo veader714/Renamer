@@ -5,7 +5,9 @@ import time
 class TVDB:
     __lastTokenRefresh = -1
     __loginData = {
-	        "apikey":"42528FAC6093648C"
+	        "apikey":"42528FAC6093648C",
+            "userkey":"1S1UHOQQZLT8RMXR",
+            "username":"veader714"
         }
     __tvURL = "https://api.thetvdb.com/"
     __token = ""
@@ -22,10 +24,10 @@ class TVDB:
         return False
     def __getLoginToken(self,key):
         d = self.__postRequest('login',key, requiresToken = False)
-        if 'token' in d:
-            return d['token']
+        if not d:
+            print("Error Getting Login Token\n" + str(d))
         else:
-            print(d)
+            return d['token']
         
     def __refreshLoginToken(self):
         return self.__getRequest('refresh_token')
@@ -37,7 +39,10 @@ class TVDB:
             headers.update({'Authorization' : 'Bearer ' + TVDB.__token})
         url = TVDB.__tvURL + url
         r = requests.post(url,data = json.dumps(payload), headers=headers)
-        return r.json()
+        if(r.status_code != 200):
+            return False
+        else:
+            return r.json()
         
     def __getRequest(self,url,payload = {},headers = {}, requiresToken = True):
         if requiresToken:
@@ -84,5 +89,4 @@ class TVDB:
         if self.__tokenNeedsRefresh():
             self.__refreshLoginToken
         data = self.__getRequest('series/season/' + str(seasonID))
-        print(data)
         return data
