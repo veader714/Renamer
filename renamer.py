@@ -13,12 +13,17 @@ class Renamer:
 	def __init__(self):
 		self.separationList = {}			# The current list of separations for the current episode
 		self.tvdbSeriesInfo = {}			# The current info about the series from TVDB
+		self.tvdbEpisodeNameArchiveList = []# The list episode names from the current series that won't be modified
 		self.tvdbEpisodeNameList = []		# The list of episode names from the current series
 		self.separators = " .-_"			# The list of common separators
 		self.filelist = []					# The current list of files from the path given
 		self.tvdbEpisodeMap = {}
+		self.episodeList = []
 		self.ignoreList = []
+		self.conversionList = []
 		self.loadIgnoreListFromFile('ignorelist')
+		self.loadConversionMapFromFile('common_conversions')
+		self.episodeNameToFileMap = {}
 
 	def guessSeriesName(self):
 		return 0
@@ -41,14 +46,15 @@ class Renamer:
 						print(stringChunks[i - 1])
 					
 	def loadIgnoreListFromFile(self,filename):
-		try:
-			f = open(filename,'r')
-			contents = f.readlines()
-			for line in contents:
-				self.ignoreList.append(line.strip('\n'))
-			print(self.ignoreList)
-		finally:
-			f.close()
+		lines = self.__readFile(filename)
+		for line in lines:
+			self.ignoreList.append(line)
+	def loadConversionMapFromFile(self,filename):
+		lines = self.__readFile(filename)
+		for line in lines:
+			conversions = tuple(line.split('|'))
+			self.conversionList.append(conversions)
+
 	def removeExtraCrap(self, filename,betweenChars=["[]","()"]):
 		if(len(self.ignoreList)>0):
 			for ignoreString in self.ignoreList:
@@ -148,8 +154,8 @@ class Renamer:
 			# the format should be Show.SXXEXXEXX+1.Episode1Title.Episode2Title
 			# I'm making the assumption that if one file has this format, all other files will. Whenever I process the filenames I can correct as necessary
 			# and yes I realize this is redundant
-			season = format1Result[0][1:3]
-			episodeNumber = int(format1Result[0][4:6])
+			season = int(format1Result[0][1:3].lstrip('0'))
+			episodeNumber = int(format1Result[0][4:6].lstrip('0'))
 			piece = str(format1Result[0][6]).lower()
 			if piece == 'a':
 				episodeNumber = (episodeNumber * 2) - 1
@@ -164,8 +170,8 @@ class Renamer:
 			format2Result = format2Check.findall(filename)
 			if len(format2Result) > 0:
 				#episode naming convention is standard and Plex can likely handle it (should we just split it off at this point????)
-				season = format2Result[0][1:3]
-				episodeNumber = int(format2Result[0][4:6])
+				season = int(format2Result[0][1:3].lstrip('0'))
+				episodeNumber = int(format2Result[0][4:6].lstrip('0'))
 				episode['seasonNumber'] = season
 				episode['episodeNumber'] = episodeNumber
 				episode['modifiedTitle'] = format2Check.split(filename)[1]
@@ -183,7 +189,11 @@ class Renamer:
 	
 
 	def popEpisodeTitlesFromFile(self,episode):
-		episodeString = episode['modifiedTitle']
+		if 'rawEpisodeTitle' in episode:
+			episodeString = episode['rawEpisodeTitle']
+		else:
+			episodeString = episode['modifiedTitle']
+			episode['rawEpisodeTitle'] = episode['modifiedTitle']
 		print(episode['title'])
 		chunkList = [i for i in re.split('\.|-|_| ',episodeString) if i]
 		hasEpisode = True
@@ -201,24 +211,18 @@ class Renamer:
 				else:
 					builtChunk = " ".join(chunkList[:i + 1])
 				guess,guessScore = process.extractOne(builtChunk,self.tvdbEpisodeNameList)
-				p1 = builtChunk.find('Part 1')
-				p2 = builtChunk.find('Part 2')
-				if p1 > -1:
-					replacement = builtChunk.replace('Part 1','(1)') #some files may have part 1 or 2, but TVDB may have it listed in (1) or (2) format
-					guessT,guessScoreT = process.extractOne(replacement,self.tvdbEpisodeNameList)
-					if guessScoreT > guessScore:
-						guessScore = guessScoreT
-						builtChunk = replacement
-				if p2 > -1:
-					replacement = builtChunk.replace('Part 2','(2)') #This will probably be a file that is loaded, but we can do that later
-					guessT,guessScoreT = process.extractOne(replacement,self.tvdbEpisodeNameList)
-					if guessScoreT > guessScore:
-						guessScore = guessScoreT
-						builtChunk = replacement
+				for conversion in self.conversionList:
+					loc = builtChunk.find(conversion[0])
+					if loc > -1:
+						replacement = builtChunk.replace(conversion[0],conversion[1])
+						guessT,guessScoreT = process.extractOne(replacement,self.tvdbEpisodeNameList)
+						if guessScoreT > guessScore:
+							guessScore = guessScoreT
+							builtChunk = replacement
 				guessData[builtChunk] = guessScore
 				if guessScore > bestGuessScore:
 					bestGuessScore = guessScore
-					bestGuess = guess
+					bestGuess = guess ###########peepeepoopoo
 					bestGuessIt = i
 				elif bestGuessScore == 100 and guessScore == 100 and i > bestGuessIt:
 					bestGuess = guess
@@ -226,11 +230,12 @@ class Renamer:
 			chunkList = chunkList[bestGuessIt + 1:]
 			hasEpisode = Renamer.__calcEpisodePresence(guessData)
 			if hasEpisode:
-				if 'episodeList' not in episode:
-					episode['episodeList'] = list()
+				if 'episodeTitleList' not in episode:
+					episode['episodeTitleList'] = list()
 				self.tvdbEpisodeNameList.remove(bestGuess)
-				episode['episodeList'].append(bestGuess)
-				print(bestGuess + "|" + str(bestGuessScore))
+				episode['episodeTitleList'].append(bestGuess)
+				self.episodeNameToFileMap[bestGuess] = episode
+				# print(bestGuess + "|" + str(bestGuessScore))
 			else:
 				# print(bestGuess + "|" + str(bestGuessScore) + " Failed")
 				pass
@@ -245,17 +250,52 @@ class Renamer:
 			self.popSeriesFromFile(episode)
 			self.popEpisodeSeasonFromFile(episode)
 			self.popEpisodeTitlesFromFile(episode)
-			self.cleanUpEpisodeInfo(episode)
 		else:
 			pass #subtitles get past the media finder so we'll just handle them separately, which is fine since we want to keep them with their episodes
 		
 	def cleanUpEpisodeInfo(self,episode):
-		if 'episodeList' in episode:
-			if not episode['episodeList']:
-				print(episode)
-			for titleMatch in episode['episodeList']:
-				pass
-				#print(titleMatch)
+		logicMap = {
+			'containsEpisodeNumber':0,
+			'containsSeasonNumber':0,
+			'episodeTitleMatches':0
+		}
+		self.__clearDuplicateEpisodes(episode)
+		if 'episodeTitleList' in episode:
+			print(episode['episodeTitleList'])
+			if len(episode['episodeTitleList']) > 1:
+				for titleMatch in episode['episodeTitleList']:
+					if self.tvdbEpisodeMap[titleMatch]['episodeNumber'] / len(episode['episodeTitleList']) == episode['episodeNumber']:
+						logicMap['containsEpisodeNumber'] = 1
+					if self.tvdbEpisodeMap[titleMatch]['seasonNumber'] == episode['seasonNumber']:
+						logicMap['containsSeasonNumber'] = 1
+					score = fuzz.token_set_ratio(episode['rawEpisodeTitle'],titleMatch) / 10
+					print(titleMatch + " | Score: " + str(score))
+					logicMap['episodeTitleMatches'] += score / len(episode['episodeTitleList'])
+			else:
+				titleMatch = episode['episodeTitleList'][0]
+				if self.tvdbEpisodeMap[titleMatch]['episodeNumber'] == episode['episodeNumber']:
+					logicMap['containsEpisodeNumber'] = 1
+				if self.tvdbEpisodeMap[titleMatch]['seasonNumber'] == episode['seasonNumber']:
+					logicMap['containsSeasonNumber'] = 1
+				score = fuzz.token_set_ratio(episode['rawEpisodeTitle'],titleMatch)
+				print(titleMatch + " | Score: " + str(score))
+				logicMap['episodeTitleMatches'] = score / 10
+		else:
+			print("Did not find anything for: " + episode['title'])
+		totalScore = sum([v for v in logicMap.values()])
+		percentage = totalScore / 12
+		if(percentage < .75):
+			if 'episodeTitleList' in episode:
+				for titleMatch in episode['episodeTitleList']:
+					score = fuzz.token_set_ratio(episode['rawEpisodeTitle'],titleMatch)
+					if score < 60:
+						print("removing: " + titleMatch)
+						episode['episodeTitleList'].remove(titleMatch)
+			print(logicMap)
+			print(totalScore)
+		else:
+			pass
+
 
 	def createSeasonFolders(self,path, seasonCount):
 		for i in range(1,seasonCount + 1):
@@ -284,20 +324,26 @@ class Renamer:
 		if(self.tvdbSeriesInfo != None):
 			for episode in self.tvdbSeriesInfo['episodes']:
 				self.tvdbEpisodeNameList.append(episode['episodeName'])
-				self.tvdbEpisodeMap[episode['episodeName']] = {'SeasonNum':episode['airedSeason'],'EpisodeNum':episode['airedEpisodeNumber']}
+				self.tvdbEpisodeNameArchiveList.append(episode['episodeName'])
+				self.tvdbEpisodeMap[episode['episodeName']] = {'seasonNumber':episode['airedSeason'],'episodeNumber':episode['airedEpisodeNumber']}
 
 		for episode in episodeList:
 			self.extractEpisodeInfo(episode)
+			if(episode['type'] == 'ep'):
+				self.episodeList.append(episode)
+		for episode in self.episodeList:
+			self.cleanUpEpisodeInfo(episode)
+		print(self.tvdbEpisodeNameList)
 
 	def __calcEpisodePresence(nameData):
-		print(nameData)
+		# print(nameData)
 		if not nameData:
 			return False
 		#sortedList = sorted(nameData.items(), key=lambda item: item[1])
 		nameList = [v for v in nameData.items() if v]
 		average = sum(int(v[1]) for v in nameList) / len(nameList)
 		maxScore = max(int(v[1]) for v in nameList)
-		print("Average: " + str(average) + " | Max: " + str(maxScore))
+		# print("Average: " + str(average) + " | Max: " + str(maxScore))
 		if maxScore >= 97 and average > 80:
 			return True
 		if average < 87:
@@ -359,7 +405,33 @@ class Renamer:
 			else:
 				chunkPos = loweredString.find(chunk,chunkPos + 1) #I'm not comfortable removing chunks if they aren't surrounded by seperators
 		return inString
+
+	def __readFile(self,filename):
+		lines = []
+		try:
+			f = open(filename,'r')
+			contents = f.readlines()
+			for line in contents:
+				lines.append(line.strip('\n'))
+		finally:
+			f.close()
+		return lines
+	def __getEpisodeBySeasonAndNumber(self,season,episodeNumber):
+		pass
+	def __getFileByEpisodeName(self,episodeName):
+		return episodeNameToFileMap[episodeName]
+	def __clearDuplicateEpisodes(self,episode):
+		if 'episodeTitleList' in episode:
+			nameMap = {}
+			for title in episode['episodeTitleList']:
+				if title not in nameMap:
+					nameMap[title] = True
+			episode['episodeTitleList'] = list(nameMap.keys())
+	def __areEpisodesSequential(self,episode):
+		pass
+
 		
+	
 	def renameEpisodes(self,episodeList, tvdbEpisodeData):
 		return 0
 	def processFolder(self,path):
@@ -374,7 +446,6 @@ class Renamer:
 # masterlist = os.listdir("/srv/Schustore/Videos/TV Shows")
 # createSeasonFolders("/srv/Schustore/Downloads/Mega/test",3)
 r = Renamer()
-print(sys.argv)
-quit()
 r.processFolder(sys.argv[1])
 # renameEpisodes(folderlist[0],tv.getEpisodesBySeriesID(testshow))
+9
