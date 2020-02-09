@@ -194,7 +194,6 @@ class Renamer:
 		else:
 			episodeString = episode['modifiedTitle']
 			episode['rawEpisodeTitle'] = episode['modifiedTitle']
-		print(episode['title'])
 		chunkList = [i for i in re.split('\.|-|_| ',episodeString) if i]
 		hasEpisode = True
 		while hasEpisode:
@@ -228,7 +227,7 @@ class Renamer:
 					bestGuess = guess
 					bestGuessIt = i
 			chunkList = chunkList[bestGuessIt + 1:]
-			hasEpisode = Renamer.__calcEpisodePresence(guessData)
+			hasEpisode = Renamer.__calculateEpisodePresence(guessData)
 			if hasEpisode:
 				if 'episodeTitleList' not in episode:
 					episode['episodeTitleList'] = list()
@@ -254,36 +253,10 @@ class Renamer:
 			pass #subtitles get past the media finder so we'll just handle them separately, which is fine since we want to keep them with their episodes
 		
 	def cleanUpEpisodeInfo(self,episode):
-		logicMap = {
-			'containsEpisodeNumber':0,
-			'containsSeasonNumber':0,
-			'episodeTitleMatches':0
-		}
+
 		self.__clearDuplicateEpisodes(episode)
-		if 'episodeTitleList' in episode:
-			print(episode['episodeTitleList'])
-			if len(episode['episodeTitleList']) > 1:
-				for titleMatch in episode['episodeTitleList']:
-					if self.tvdbEpisodeMap[titleMatch]['episodeNumber'] / len(episode['episodeTitleList']) == episode['episodeNumber']:
-						logicMap['containsEpisodeNumber'] = 1
-					if self.tvdbEpisodeMap[titleMatch]['seasonNumber'] == episode['seasonNumber']:
-						logicMap['containsSeasonNumber'] = 1
-					score = fuzz.token_set_ratio(episode['rawEpisodeTitle'],titleMatch) / 10
-					print(titleMatch + " | Score: " + str(score))
-					logicMap['episodeTitleMatches'] += score / len(episode['episodeTitleList'])
-			else:
-				titleMatch = episode['episodeTitleList'][0]
-				if self.tvdbEpisodeMap[titleMatch]['episodeNumber'] == episode['episodeNumber']:
-					logicMap['containsEpisodeNumber'] = 1
-				if self.tvdbEpisodeMap[titleMatch]['seasonNumber'] == episode['seasonNumber']:
-					logicMap['containsSeasonNumber'] = 1
-				score = fuzz.token_set_ratio(episode['rawEpisodeTitle'],titleMatch)
-				print(titleMatch + " | Score: " + str(score))
-				logicMap['episodeTitleMatches'] = score / 10
-		else:
-			print("Did not find anything for: " + episode['title'])
-		totalScore = sum([v for v in logicMap.values()])
-		percentage = totalScore / 12
+		print(episode['title'])
+		percentage = self.__calculateEpisodeAccuracyPercentage(episode)
 		if(percentage < .75):
 			if 'episodeTitleList' in episode:
 				for titleMatch in episode['episodeTitleList']:
@@ -291,8 +264,6 @@ class Renamer:
 					if score < 60:
 						print("removing: " + titleMatch)
 						episode['episodeTitleList'].remove(titleMatch)
-			print(logicMap)
-			print(totalScore)
 		else:
 			pass
 
@@ -335,7 +306,7 @@ class Renamer:
 			self.cleanUpEpisodeInfo(episode)
 		print(self.tvdbEpisodeNameList)
 
-	def __calcEpisodePresence(nameData):
+	def __calculateEpisodePresence(nameData):
 		# print(nameData)
 		if not nameData:
 			return False
@@ -429,7 +400,42 @@ class Renamer:
 			episode['episodeTitleList'] = list(nameMap.keys())
 	def __areEpisodesSequential(self,episode):
 		pass
-
+	def __calculateEpisodeAccuracyPercentage(self,episode):
+		logicMap = {
+			'containsEpisodeNumber':0,
+			'containsSeasonNumber':0,
+			'episodeTitleMatches':0,
+			'scoreMap':{}
+		}
+		if 'episodeTitleList' in episode:
+			print(episode['episodeTitleList'])
+			if len(episode['episodeTitleList']) > 1:
+				for titleMatch in episode['episodeTitleList']:
+					if self.tvdbEpisodeMap[titleMatch]['episodeNumber'] / len(episode['episodeTitleList']) == episode['episodeNumber']:
+						logicMap['containsEpisodeNumber'] = 1
+					if self.tvdbEpisodeMap[titleMatch]['seasonNumber'] == episode['seasonNumber']:
+						logicMap['containsSeasonNumber'] = 1
+					score = fuzz.token_set_ratio(episode['rawEpisodeTitle'],titleMatch) / 10
+					logicMap['scoreMap'][titleMatch] = score
+					print(titleMatch + " | Score: " + str(score))
+					logicMap['episodeTitleMatches'] += score / len(episode['episodeTitleList'])
+			else:
+				titleMatch = episode['episodeTitleList'][0]
+				if self.tvdbEpisodeMap[titleMatch]['episodeNumber'] == episode['episodeNumber']:
+					logicMap['containsEpisodeNumber'] = 1
+				if self.tvdbEpisodeMap[titleMatch]['seasonNumber'] == episode['seasonNumber']:
+					logicMap['containsSeasonNumber'] = 1
+				score = fuzz.token_set_ratio(episode['rawEpisodeTitle'],titleMatch) / 10
+				logicMap['scoreMap'][titleMatch] = score
+				print(titleMatch + " | Score: " + str(score))
+				logicMap['episodeTitleMatches'] = score
+		else:
+			print("Did not find anything for: " + episode['title'])
+		totalScore = sum([v for v in logicMap.values() if type(v) is not dict])
+		percentage = totalScore / 12
+		return percentage
+	def __calculateEpisodeSetAccuracy(self):
+		pass
 		
 	
 	def renameEpisodes(self,episodeList, tvdbEpisodeData):
@@ -448,4 +454,3 @@ class Renamer:
 r = Renamer()
 r.processFolder(sys.argv[1])
 # renameEpisodes(folderlist[0],tv.getEpisodesBySeriesID(testshow))
-9
