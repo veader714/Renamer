@@ -194,51 +194,9 @@ class Renamer:
 		else:
 			episodeString = episode['modifiedTitle']
 			episode['rawEpisodeTitle'] = episode['modifiedTitle']
-		chunkList = [i for i in re.split('\.|-|_| ',episodeString) if i]
-		hasEpisode = True
-		while hasEpisode:
-			if len(chunkList) == 0:
-				break
-			guessData = {}
-			bestGuess = ""
-			bestGuessScore = -1
-			bestGuessIt = -1	
-			for i in range(0,len(chunkList)):
-				builtChunk = ""
-				if i == 0:
-					builtChunk = chunkList[i]
-				else:
-					builtChunk = " ".join(chunkList[:i + 1])
-				guess,guessScore = process.extractOne(builtChunk,self.tvdbEpisodeNameList)
-				for conversion in self.conversionList:
-					loc = builtChunk.find(conversion[0])
-					if loc > -1:
-						replacement = builtChunk.replace(conversion[0],conversion[1])
-						guessT,guessScoreT = process.extractOne(replacement,self.tvdbEpisodeNameList)
-						if guessScoreT > guessScore:
-							guessScore = guessScoreT
-							builtChunk = replacement
-				guessData[builtChunk] = guessScore
-				if guessScore > bestGuessScore:
-					bestGuessScore = guessScore
-					bestGuess = guess ###########peepeepoopoo
-					bestGuessIt = i
-				elif bestGuessScore == 100 and guessScore == 100 and i > bestGuessIt:
-					bestGuess = guess
-					bestGuessIt = i
-			chunkList = chunkList[bestGuessIt + 1:]
-			hasEpisode = Renamer.__calculateEpisodePresence(guessData)
-			if hasEpisode:
-				if 'episodeTitleList' not in episode:
-					episode['episodeTitleList'] = list()
-				self.tvdbEpisodeNameList.remove(bestGuess)
-				episode['episodeTitleList'].append(bestGuess)
-				self.episodeNameToFileMap[bestGuess] = episode
-				# print(bestGuess + "|" + str(bestGuessScore))
-			else:
-				# print(bestGuess + "|" + str(bestGuessScore) + " Failed")
-				pass
-		return 0
+		episode['episodeTitleList'] = self.__getEpisodeTitlesFromString(episodeString,self.tvdbEpisodeNameList)
+		for title in episode['episodeTitleList']:
+			self.episodeNameToFileMap[title] = episode
 
 	# 
 	def extractEpisodeInfo(self,episode):
@@ -253,19 +211,26 @@ class Renamer:
 			pass #subtitles get past the media finder so we'll just handle them separately, which is fine since we want to keep them with their episodes
 		
 	def cleanUpEpisodeInfo(self,episode):
-
 		self.__clearDuplicateEpisodes(episode)
 		print(episode['title'])
 		percentage = self.__calculateEpisodeAccuracyPercentage(episode)
 		if(percentage < .75):
+			removedEpisodes = []
 			if 'episodeTitleList' in episode:
 				for titleMatch in episode['episodeTitleList']:
-					score = fuzz.token_set_ratio(episode['rawEpisodeTitle'],titleMatch)
+					score = self.__calculateStringMatch(episode['rawEpisodeTitle'],titleMatch,fuzz.token_set_ratio)
+					score2 = self.__calculateStringMatch(episode['rawEpisodeTitle'],titleMatch)
+					score = .7 * score + .3 * score2
+					print("rescored: " + str(score))
 					if score < 60:
 						print("removing: " + titleMatch)
 						episode['episodeTitleList'].remove(titleMatch)
-		else:
-			pass
+						removedEpisodes.append(titleMatch)
+			if 'episodeTitleList' not in episode or ( 'episodeTitleList' in episode and len(episode['episodeTitleList']) == 0):
+				guess,guessScore = self.__guessEpisodeFromSet(episode['rawEpisodeTitle'],self.tvdbEpisodeNameList,scorer=fuzz.token_set_ratio)
+				guess2,guessScore2 = self.__guessEpisodeFromSet(episode['rawEpisodeTitle'],self.tvdbEpisodeNameList)
+				print("Cleaned up episode and matched with: " + str(guess) + " | score: " + str(guessScore))
+				print("Cleaned up episode and matched with: " + str(guess2) + " | score: " + str(guessScore2))
 
 
 	def createSeasonFolders(self,path, seasonCount):
@@ -283,7 +248,7 @@ class Renamer:
 			return
 		if os.path.isfile(path):
 			self.extractEpisodeInfo(path)
-		episodeList =[]
+		episodeList = []
 		for root, subFolders, files in os.walk(path):
 			for f in files:
 				filepath = os.path.join(root,f)
@@ -321,6 +286,7 @@ class Renamer:
 			return False
 		return True
 	
+	# This might be used later...
 	def __calculatePeaksAndValleys(self,nameList):
 		peakCount = 0
 		valleyCount = 0
@@ -407,28 +373,15 @@ class Renamer:
 			'episodeTitleMatches':0,
 			'scoreMap':{}
 		}
-		if 'episodeTitleList' in episode:
-			print(episode['episodeTitleList'])
-			if len(episode['episodeTitleList']) > 1:
-				for titleMatch in episode['episodeTitleList']:
-					if self.tvdbEpisodeMap[titleMatch]['episodeNumber'] / len(episode['episodeTitleList']) == episode['episodeNumber']:
-						logicMap['containsEpisodeNumber'] = 1
-					if self.tvdbEpisodeMap[titleMatch]['seasonNumber'] == episode['seasonNumber']:
-						logicMap['containsSeasonNumber'] = 1
-					score = fuzz.token_set_ratio(episode['rawEpisodeTitle'],titleMatch) / 10
-					logicMap['scoreMap'][titleMatch] = score
-					print(titleMatch + " | Score: " + str(score))
-					logicMap['episodeTitleMatches'] += score / len(episode['episodeTitleList'])
-			else:
-				titleMatch = episode['episodeTitleList'][0]
-				if self.tvdbEpisodeMap[titleMatch]['episodeNumber'] == episode['episodeNumber']:
+		if len(episode['episodeTitleList']) != 0:
+			for titleMatch in episode['episodeTitleList']:
+				if self.tvdbEpisodeMap[titleMatch]['episodeNumber'] / len(episode['episodeTitleList']) == episode['episodeNumber']:
 					logicMap['containsEpisodeNumber'] = 1
 				if self.tvdbEpisodeMap[titleMatch]['seasonNumber'] == episode['seasonNumber']:
 					logicMap['containsSeasonNumber'] = 1
-				score = fuzz.token_set_ratio(episode['rawEpisodeTitle'],titleMatch) / 10
+				score = self.__calculateStringMatch(episode['rawEpisodeTitle'],titleMatch,fuzz.token_set_ratio) / 10
 				logicMap['scoreMap'][titleMatch] = score
-				print(titleMatch + " | Score: " + str(score))
-				logicMap['episodeTitleMatches'] = score
+				logicMap['episodeTitleMatches'] += score / len(episode['episodeTitleList'])
 		else:
 			print("Did not find anything for: " + episode['title'])
 		totalScore = sum([v for v in logicMap.values() if type(v) is not dict])
@@ -436,7 +389,28 @@ class Renamer:
 		return percentage
 	def __calculateEpisodeSetAccuracy(self):
 		pass
-		
+	def __guessEpisodeFromSet(self,episodeString,episodeSet,scorer = fuzz.WRatio):
+		guess,guessScore = process.extractOne(episodeString,episodeSet,scorer = scorer)
+		for conversion in self.conversionList:
+			loc = episodeString.find(conversion[0])
+			if loc > -1:
+				replacement = episodeString.replace(conversion[0],conversion[1])
+				guessT,guessScoreT = process.extractOne(replacement,self.tvdbEpisodeNameList)
+				if guessScoreT > guessScore:
+					guessScore = guessScoreT
+					builtChunk = replacement
+		return(guess,guessScore)
+
+	def __calculateStringMatch(self,firstString,secondString,scorer=fuzz.WRatio):
+		score = scorer(firstString,secondString)
+		for conversion in self.conversionList:
+			loc = firstString.find(conversion[0])
+			if loc > -1:
+				replacement = firstString.replace(conversion[0],conversion[1])
+				guessScoreT = scorer(replacement,secondString)
+				if guessScoreT > score:
+					score = guessScoreT
+		return score
 	
 	def renameEpisodes(self,episodeList, tvdbEpisodeData):
 		return 0
@@ -448,6 +422,44 @@ class Renamer:
 		testshow = pshows[0]['id']
 		self.tvdbSeriesInfo = {'series':pshows[0],'episodes':Renamer.__tv.getEpisodesBySeriesID(testshow)}
 		self.extractEpisodesFromPath(os.path.join(path + show))
+
+
+	def __getEpisodeTitlesFromString(self,episodeString,titleSet,scorer=fuzz.WRatio):
+		titleList = []
+		chunkList = [i for i in re.split('\.|-|_| ',episodeString) if i]
+		hasEpisode = True
+		while hasEpisode:
+			if len(chunkList) == 0:
+				return titleList
+			guessData = {}
+			bestGuess = ""
+			bestGuessScore = -1
+			bestGuessIt = -1	
+			for i in range(0,len(chunkList)):
+				builtChunk = ""
+				if i == 0:
+					builtChunk = chunkList[i]
+				else:
+					builtChunk = " ".join(chunkList[:i + 1])
+				guess,guessScore = self.__guessEpisodeFromSet(builtChunk,titleSet)
+				guessData[builtChunk] = guessScore
+				if guessScore > bestGuessScore:
+					bestGuessScore = guessScore
+					bestGuess = guess ###########peepeepoopoo
+					bestGuessIt = i
+				elif bestGuessScore == 100 and guessScore == 100 and i > bestGuessIt:
+					bestGuess = guess
+					bestGuessIt = i
+			chunkList = chunkList[bestGuessIt + 1:]
+			hasEpisode = Renamer.__calculateEpisodePresence(guessData)
+			if hasEpisode:
+				titleSet.remove(bestGuess)
+				titleList.append(bestGuess)
+				# print(bestGuess + "|" + str(bestGuessScore))
+			else:
+				# print(bestGuess + "|" + str(bestGuessScore) + " Failed")
+				pass
+		return titleList
 
 # masterlist = os.listdir("/srv/Schustore/Videos/TV Shows")
 # createSeasonFolders("/srv/Schustore/Downloads/Mega/test",3)
